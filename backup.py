@@ -11,8 +11,8 @@ from minio import Minio
 import socket
 from datetime import datetime, timedelta
 
-from config import (BUCKET, ACCESS_KEY, SECRET_KEY, URL, CLIENT_NAME, LotageBackupDays, STATUS_FILE,
-                    MinPresaveBackup, ZIP_PASSWORD, SOURCE, SOURCE_EXCLUDE, STATUS_COMMANDS)
+from config import OSS_CONFIGS, CLIENT_NAME, DAYS_TO_RETAIN, STATUS_FILE_PATH, \
+    MIN_COUNT_TO_KEEP, ZIP_PASSWORD, SOURCE_PATH, SOURCE_EXCLUDE, STATUS_COMMANDS
 
 
 def get_client_name():
@@ -25,40 +25,61 @@ def get_client_name():
     return f'{hostname}_{ip_address}'
 
 
-class BackupManager:
+def strip_last_slash(string):
+    return re.sub('/+$', '', string)
+
+
+client_name = CLIENT_NAME or get_client_name()
+
+
+class _Class:
     def __init__(self, verbose=False):
-        self.url = URL
-        secure = True if URL.startswith('https') else False
-        endpoint = re.sub('http[s]://', '', URL, re.I)
-        self.client = Minio(endpoint, access_key=ACCESS_KEY, secret_key=SECRET_KEY, secure=secure)
-        print(f'Connect {self.url}')
-        self.source = [x.strip() for x in SOURCE.strip().split('\n') if x]
-        self.source_exclude = [x.strip() for x in SOURCE_EXCLUDE.strip().split('\n') if x]
-        self.client_name = CLIENT_NAME or get_client_name()
         self.verbose = verbose
 
     def _print_verbose(self, message):
         if self.verbose:
             print(message)
 
-    def _safe_subprocess_run(self, command):
-        self._print_verbose(f'RUN: {" ".join(command)}')
-        output = subprocess.getoutput(' '.join(command))
-        return output
 
-    def create_bucket(self, bucket_name):
-        if not self.client.bucket_exists(bucket_name):
-            self.client.make_bucket(bucket_name)
-            self._print_verbose(f'Bucket {bucket_name} created successfully')
+class OssManger(_Class):
+    def __init__(self, url, access_key, secret_key, bucket_name, verbose=False):
+        super(OssManger, self).__init__(verbose=verbose)
+        self.url = url
+        self.bucket_name = bucket_name
+        secure = True if url.startswith('https') else False
+        endpoint = re.sub('http[s]://', '', url, re.I)
+        self.is_connected = False
+        self.client = Minio(endpoint, access_key=access_key, secret_key=secret_key, secure=secure)
+        self.check_connection()
 
-    def upload_object(self, bucket_name, object_name, file_path):
+    def check_connection(self):
+        try:
+            # 列出所有的存储桶
+            buckets = self.client.list_buckets()
+            print(f'\nConnection {self.url} successful!\n')
+            self.is_connected = True
+        except Exception as e:
+            print(f'\nConnection {self.url} fail: {e}\n')
+
+    def create_bucket(self):
+        if not self.client.bucket_exists(self.bucket_name):
+            self.client.make_bucket(self.bucket_name)
+            self._print_verbose(f'Bucket {self.bucket_name} created successfully')
+
+    def upload_object(self, remote_dir, local_file_path):
+        remote_dir = strip_last_slash(remote_dir)
+        self.create_bucket()
+        object_name = f'{remote_dir}/{local_file_path}'
         """Upload the specified file to the specified bucket."""
-        self._print_verbose(f'Uploading {file_path} to {bucket_name}/{object_name}')
-        result = self.client.fput_object(bucket_name, object_name, file_path)
-        self._print_verbose(f'Uploaded as {result.object_name} with ETag: {result.etag}')
+        self._print_verbose(f'Uploading {local_file_path} to {self.url}/{self.bucket_name}/{object_name}')
+        result = self.client.fput_object(self.bucket_name, object_name, local_file_path)
+        print(f'Uploaded as {self.url}/{result.bucket_name}/{result.object_name} with ETag: {result.etag}')
 
-    def _prompt_for_download(self, objs):
+    def prompt_for_download(self, remote_dir):
+        remote_dir = strip_last_slash(remote_dir)
+        objs = list(self.client.list_objects(self.bucket_name, f'{remote_dir}/'))
         # Number the objects
+        print(f'Objects in {self.url}/{self.bucket_name}:')
         for i, obj in enumerate(objs, 1):
             print(f"{i}) {obj.object_name} {obj.size}")
 
@@ -73,22 +94,29 @@ class BackupManager:
             try:
                 choice_num = int(choice)
                 if 1 <= choice_num <= len(objs):
-                    self.download_object(BUCKET, objs[choice_num - 1].object_name)
+                    self.download_object(objs[choice_num - 1].object_name)
                     break
                 else:
                     print(f"Please enter a number between 1 and {len(objs)}")
             except ValueError:
                 print("Please enter a valid number or 'q' to quit.")
 
-    def download_object(self, bucket_name, object_name):
+    def download_object(self, object_name):
         file_path = object_name.split('/')[-1]
-        self.client.fget_object(bucket_name, object_name, file_path)
-        self._print_verbose(f'Downloaded {object_name} from bucket {bucket_name} to {file_path}')
+        self.client.fget_object(self.bucket_name, object_name, file_path)
+        print(f'Downloaded {object_name} from bucket {self.bucket_name} to {file_path}')
 
-    def delete_old_objects(self, bucket_name, prefix, days_to_retain, min_count_to_keep):
+    def list_objects(self, remote_dir='/'):
+        remote_dir = strip_last_slash(remote_dir)
+        objects = sorted(
+            self.client.list_objects(self.bucket_name, prefix=f'{remote_dir}/'),
+            key=lambda x: x.last_modified)
+        return objects
+
+    def delete_old_objects(self, remote_dir, days_to_retain, min_count_to_keep):
         current_time_with_tz = datetime.now(pytz.timezone('Asia/Shanghai'))
         objs_to_delete = []
-        objects = sorted(self.client.list_objects(bucket_name, prefix=prefix), key=lambda x: x.last_modified)
+        objects = self.list_objects(remote_dir=remote_dir)
 
         for obj in objects:
             if len(objects) - len(objs_to_delete) <= min_count_to_keep:
@@ -97,27 +125,48 @@ class BackupManager:
                 objs_to_delete.append(obj.object_name)
 
         for obj_name in objs_to_delete:
-            self.client.remove_object(bucket_name, obj_name)
-            self._print_verbose(f'Deleted {obj_name} from bucket {bucket_name}')
+            self.client.remove_object(self.bucket_name, obj_name)
+            print(f'Deleted {self.url}/{obj_name}')
 
-    def pack_backup(self):
+
+class Package(_Class):
+    def __init__(self, verbose=False):
+        super(Package, self).__init__(verbose=verbose)
+        self.verbose = verbose
+
+    def _print_verbose(self, message):
+        if self.verbose:
+            print(message)
+
+    def _safe_subprocess_run(self, command):
+        self._print_verbose(f'RUN: {" ".join(command)}')
+        output = subprocess.getoutput(' '.join(command))
+        return output
+
+    def pack_backup(self, source_path, source_exclude, zip_password=None):
+        source_list = [x.strip() for x in source_path]
+        source_exclude_liset = [x.strip() for x in source_exclude]
+
         # Define tar and zip names
         current_datetime = datetime.now().strftime('%y%m%d%H%M%S')
         tar_name = f'autobackup_{current_datetime}.tar'
-        zip_name = f'{tar_name}.zip'
         # Create tar
-        tar_command = ['tar', 'cf', tar_name] + ['--exclude=' + pattern for pattern in self.source_exclude] + self.source
+        tar_command = ['tar', 'cf', tar_name] + \
+                      ['--exclude=' + pattern for pattern in source_exclude_liset] + source_list
         self._safe_subprocess_run(tar_command)
-        # Zip with password
-        zip_command = ['zip', '-P', ZIP_PASSWORD, zip_name, tar_name]
-        self._safe_subprocess_run(zip_command)
-        # Remove tar file
-        os.remove(tar_name)
-        return zip_name  # Return zip_name for further processing
 
-    def save_status(self, status_file_path):
+        # Zip with password
+        if isinstance(zip_password, str):
+            zip_name = f'{tar_name}.zip'
+            zip_command = ['zip', '-P', zip_password, zip_name, tar_name]
+            self._safe_subprocess_run(zip_command)
+            self.remove(tar_name)
+            return zip_name
+        return tar_name
+
+    def save_status(self, commands, status_file_path):
         with open(status_file_path, 'w') as status_file:
-            for cmd in STATUS_COMMANDS:
+            for cmd in commands:
                 output = self._safe_subprocess_run(cmd.split())
                 status_file.write(f'# {cmd}\n{output}\n\n')
             crontabs_dir = '/var/spool/cron/crontabs'
@@ -131,30 +180,45 @@ class BackupManager:
                                 status_file.write(line)
                     status_file.write('\n')
 
+    def remove(self, fn):
+        self._print_verbose(f'Remove local file {fn}')
+        os.remove(fn)
 
-    def perform_backup(self):
-        self.save_status(STATUS_FILE)
-        zip_name = self.pack_backup()
-        object_path = f'{self.client_name}/{zip_name}'
-        self.create_bucket(BUCKET)
-        self.upload_object(BUCKET, object_path, zip_name)
-        os.remove(zip_name)
-        self.delete_old_objects(BUCKET, f'{self.client_name}/', LotageBackupDays, MinPresaveBackup)
 
-    def run(self, backup, list_objects, download_object):
-        if backup:
-            self.perform_backup()
-        elif list_objects:
-            objs = list(self.client.list_objects(BUCKET, f'{self.client_name}/'))
-            self._prompt_for_download(objs)
-        elif download_object:
-            self.download_object(BUCKET, download_object)
+def main(args):
+    oss_instances = []
+    for oss_config in OSS_CONFIGS:
+        ossi = OssManger(verbose=args.verbose, **oss_config)
+        if ossi.is_connected:
+            oss_instances.append(ossi)
+    if len(oss_instances) == 0:
+        print('No available oss server!')
+        exit(1)
+    ossi_main = oss_instances[0]
+
+    if args.backup:
+        pk = Package(verbose=args.verbose)
+        if args.with_status:
+            pk.save_status(commands=STATUS_COMMANDS, status_file_path=STATUS_FILE_PATH)
+            SOURCE_PATH.append(STATUS_FILE_PATH)
+        fn = pk.pack_backup(source_path=SOURCE_PATH, source_exclude=SOURCE_EXCLUDE, zip_password=ZIP_PASSWORD)
+        for ossi in oss_instances:
+            ossi.upload_object(remote_dir=client_name, local_file_path=fn)
+            ossi.delete_old_objects(
+                remote_dir=client_name, days_to_retain=DAYS_TO_RETAIN, min_count_to_keep=MIN_COUNT_TO_KEEP)
+        pk.remove(fn)
+    elif args.list:
+        ossi_main.prompt_for_download(remote_dir=client_name)
+    elif args.download:
+        ossi_main.download_object(args.download)
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Backup manager using MinIO.')
     parser.add_argument('--backup', action='store_true', help='Execute backup and upload.')
     parser.add_argument('--list', action='store_true', help='List objects and prompt for download.')
     parser.add_argument('--download', metavar='OBJECT_NAME', type=str, help='Directly download specified object.')
+    parser.add_argument('--with-status', action='store_true', help=f'Save status to {STATUS_FILE_PATH}')
     parser.add_argument('--verbose', action='store_true', help='Display verbose output.')
 
     args = parser.parse_args()
@@ -163,5 +227,4 @@ if __name__ == '__main__':
         print("At least one action (--backup, --list, --download) must be specified.")
         exit(1)
 
-    manager = BackupManager(verbose=args.verbose)
-    manager.run(args.backup, args.list, args.download)
+    main(args)
