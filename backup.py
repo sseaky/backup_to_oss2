@@ -7,12 +7,26 @@ import os
 import re
 import subprocess
 import pytz
-from minio import Minio
 import socket
+from minio import Minio
 from datetime import datetime, timedelta
+from cryptography.fernet import Fernet
 
 from config import OSS_CONFIGS, CLIENT_NAME, DAYS_TO_RETAIN, STATUS_FILE_PATH, \
-    MIN_COUNT_TO_KEEP, ZIP_PASSWORD, SOURCE_PATH, SOURCE_EXCLUDE, STATUS_COMMANDS
+    MIN_COUNT_TO_KEEP, ZIP_PASSWORD, SOURCE_PATH, SOURCE_EXCLUDE, STATUS_COMMANDS, DECRYPTO_KEY
+
+
+def encrypto(string, key):
+    key = Fernet.generate_key() if not key else key.encode()
+    cipher_suite = Fernet(key)
+    encrypted_text = cipher_suite.encrypt(string.strip().encode())
+    print(f'text: {string}, key: {key.decode()}, encrypted_text: {encrypted_text.decode()}')
+
+
+def decrypto(string, key):
+    cipher_suite = Fernet(key.encode())
+    decrypted_text = cipher_suite.decrypt(string.encode()).decode()
+    return decrypted_text
 
 
 def get_client_name():
@@ -48,6 +62,7 @@ class OssManger(_Class):
         self.bucket_name = bucket_name
         secure = True if url.startswith('https') else False
         endpoint = re.sub('http[s]://', '', url, re.I)
+        self.domain = re.sub(':\d+', '', '.'.join(endpoint.split('.')[-2:]))
         self.is_connected = False
         self.client = Minio(endpoint, access_key=access_key, secret_key=secret_key, secure=secure)
         self.check_connection()
@@ -56,10 +71,10 @@ class OssManger(_Class):
         try:
             # 列出所有的存储桶
             buckets = self.client.list_buckets()
-            print(f'\nConnection {self.url} successful!\n')
+            print(f'\nConnection [{self.domain}] successful!\n')
             self.is_connected = True
         except Exception as e:
-            print(f'\nConnection {self.url} fail: {e}\n')
+            print(f'\nConnection [{self.domain}] fail: {e}\n')
 
     def create_bucket(self):
         if not self.client.bucket_exists(self.bucket_name):
@@ -71,15 +86,15 @@ class OssManger(_Class):
         self.create_bucket()
         object_name = f'{remote_dir}/{local_file_path}'
         """Upload the specified file to the specified bucket."""
-        self._print_verbose(f'Uploading {local_file_path} to {self.url}/{self.bucket_name}/{object_name}')
+        self._print_verbose(f'Uploading {local_file_path} to [{self.domain}] {self.bucket_name}/{object_name}')
         result = self.client.fput_object(self.bucket_name, object_name, local_file_path)
-        print(f'Uploaded as {self.url}/{result.bucket_name}/{result.object_name} with ETag: {result.etag}')
+        print(f'Uploaded as [{self.domain}] {result.bucket_name}/{result.object_name} with ETag: {result.etag}')
 
     def prompt_for_download(self, remote_dir):
         remote_dir = strip_last_slash(remote_dir)
         objs = list(self.client.list_objects(self.bucket_name, f'{remote_dir}/'))
         # Number the objects
-        print(f'Objects in {self.url}/{self.bucket_name}:')
+        print(f'Objects in [{self.domain}] {self.bucket_name}:')
         for i, obj in enumerate(objs, 1):
             print(f"{i}) {obj.object_name} {obj.size}")
 
@@ -126,7 +141,7 @@ class OssManger(_Class):
 
         for obj_name in objs_to_delete:
             self.client.remove_object(self.bucket_name, obj_name)
-            print(f'Deleted {self.url}/{obj_name}')
+            print(f'Deleted [{self.domain}] {obj_name}')
 
 
 class Package(_Class):
@@ -185,7 +200,28 @@ class Package(_Class):
         os.remove(fn)
 
 
-def main(args):
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description='Backup manager using MinIO.')
+    parser.add_argument('--backup', action='store_true', help='Execute backup and upload.')
+    parser.add_argument('--list', action='store_true', help='List objects and prompt for download.')
+    parser.add_argument('--download', metavar='OBJECT_NAME', type=str, help='Directly download specified object.')
+    parser.add_argument('--with-status', action='store_true', help=f'Save status to {STATUS_FILE_PATH}')
+    parser.add_argument('--enc_text', metavar='TEXT', type=str, help='Encrypto text')
+    parser.add_argument('--enc_key', metavar='key', type=str, help='Encrypto key')
+    parser.add_argument('--verbose', action='store_true', help='Display verbose output.')
+
+    args = parser.parse_args()
+
+    if args.enc_text:
+        for txt in args.enc_text.split():
+            encrypto(string=txt, key=args.enc_key)
+        exit(0)
+
+    if isinstance(DECRYPTO_KEY, str):
+        for x in OSS_CONFIGS:
+            for k in ['url', 'access_key', 'secret_key']:
+                x[k] = decrypto(x[k], DECRYPTO_KEY)
+
     oss_instances = []
     for oss_config in OSS_CONFIGS:
         ossi = OssManger(verbose=args.verbose, **oss_config)
@@ -212,19 +248,3 @@ def main(args):
     elif args.download:
         ossi_main.download_object(args.download)
 
-
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='Backup manager using MinIO.')
-    parser.add_argument('--backup', action='store_true', help='Execute backup and upload.')
-    parser.add_argument('--list', action='store_true', help='List objects and prompt for download.')
-    parser.add_argument('--download', metavar='OBJECT_NAME', type=str, help='Directly download specified object.')
-    parser.add_argument('--with-status', action='store_true', help=f'Save status to {STATUS_FILE_PATH}')
-    parser.add_argument('--verbose', action='store_true', help='Display verbose output.')
-
-    args = parser.parse_args()
-
-    if not any([args.backup, args.list, args.download]):
-        print("At least one action (--backup, --list, --download) must be specified.")
-        exit(1)
-
-    main(args)

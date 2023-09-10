@@ -13,13 +13,13 @@
 # 安装
 
 ```
-git clone https://github.com/sseaky/backup_to_oss.git2
+pip install minio pytz cryptography
+git clone https://github.com/sseaky/backup_to_oss2.git && cd backup_to_oss2
 ```
 
 复制config_example.sh为config.sh，并修改配置信息
 
 ```
-cd backup_to_oss2
 cp config_example.py config.py
 vi config.py
 ```
@@ -35,8 +35,8 @@ vi config.py
 | --download    | 下载指定文件                          |
 | --with-status | 备份时，可保存客户端的一些状态信息    |
 | --verbose     | 详细输出                              |
-
-
+| --enc_text    | 使用enc_key加密字串                   |
+| --enc_key     | 加密key                               |
 
 ```
 python3 backup.py --backup --verbose
@@ -45,6 +45,15 @@ python3 backup.py --backup --verbose
 每天备份，使用crontab
 
 ```
-0 0 * * * cd <path>/backup_to_oss && python3 backup.py --backup --with-status
+32 0 * * * cd ~/git/backup_to_oss2 && python3 backup.py --backup --with-status
+```
+
+
+
+# pyarmor
+
+```
+pip install pyarmor
+pyarmor g config.py backup.py
 ```
 
