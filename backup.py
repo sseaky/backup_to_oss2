@@ -158,26 +158,28 @@ class Package(_Class):
         output = subprocess.getoutput(' '.join(command))
         return output
 
-    def pack_backup(self, source_path, source_exclude, zip_password=None):
+    def pack_backup(self, source_path, source_exclude, tar=False, zip_password=None):
         source_list = [x.strip() for x in source_path]
         source_exclude_liset = [x.strip() for x in source_exclude]
 
         # Define tar and zip names
         current_datetime = datetime.now().strftime('%y%m%d%H%M%S')
-        tar_name = f'autobackup_{current_datetime}.tar'
+        stem = f'autobackup_{current_datetime}'
+        tar_name = f'{stem}.tar.gz'
         # Create tar
-        tar_command = ['tar', 'cf', tar_name] + \
+        tar_command = ['tar', 'zcf', tar_name] + \
                       ['--exclude=' + pattern for pattern in source_exclude_liset] + source_list
         self._safe_subprocess_run(tar_command)
+        if tar or not zip_password:
+            return tar_name
 
         # Zip with password
-        if isinstance(zip_password, str):
-            zip_name = f'{tar_name}.zip'
-            zip_command = ['zip', '-P', zip_password, zip_name, tar_name]
-            self._safe_subprocess_run(zip_command)
-            self.remove(tar_name)
-            return zip_name
-        return tar_name
+        zip_name = f'{stem}.zip'
+        zip_command = ['zip', '-P', zip_password, zip_name, tar_name]
+        self._safe_subprocess_run(zip_command)
+        self.remove(tar_name)
+        return zip_name
+
 
     def save_status(self, commands, status_file_path):
         with open(status_file_path, 'w') as status_file:
@@ -206,8 +208,9 @@ if __name__ == '__main__':
     parser.add_argument('--list', action='store_true', help='List objects and prompt for download.')
     parser.add_argument('--download', metavar='OBJECT_NAME', type=str, help='Directly download specified object.')
     parser.add_argument('--with-status', action='store_true', help=f'Save status to {STATUS_FILE_PATH}')
-    parser.add_argument('--enc_text', metavar='TEXT', type=str, help='Encrypto text')
-    parser.add_argument('--enc_key', metavar='key', type=str, help='Encrypto key')
+    parser.add_argument('--enc-text', metavar='TEXT', type=str, help='Encrypto text')
+    parser.add_argument('--enc-key', metavar='key', type=str, help='Encrypto key')
+    parser.add_argument('--tar', action='store_true', help='use tar instead of zip, disable encrypt')
     parser.add_argument('--verbose', action='store_true', help='Display verbose output.')
 
     args = parser.parse_args()
@@ -237,7 +240,7 @@ if __name__ == '__main__':
         if args.with_status:
             pk.save_status(commands=STATUS_COMMANDS, status_file_path=STATUS_FILE_PATH)
             SOURCE_PATH.append(STATUS_FILE_PATH)
-        fn = pk.pack_backup(source_path=SOURCE_PATH, source_exclude=SOURCE_EXCLUDE, zip_password=ZIP_PASSWORD)
+        fn = pk.pack_backup(source_path=SOURCE_PATH, source_exclude=SOURCE_EXCLUDE, tar=args.tar, zip_password=ZIP_PASSWORD)
         for ossi in oss_instances:
             ossi.upload_object(remote_dir=client_name, local_file_path=fn)
             ossi.delete_old_objects(
