@@ -1,3 +1,9 @@
+# 打包设置
+ZIP_PASSWORD = '12345678'
+BACKUP_FILE_STEM = 'autobackup'
+DAYS_TO_RETAIN = 60
+MIN_COUNT_TO_KEEP = 5
+
 # 基础配置
 CLIENT_NAME = ''  # BUCKET中的目录名，如果为空，则自动为<hostname>_<ip>
 
@@ -9,28 +15,28 @@ STATUS_COMMANDS = [
     'w',
     'last',
     'lastb',
+    'free -h',
     'mount',
     'df -h',
     'ip a',
     'ip route',
+    'ip -6 route',
     'iptables-save',
     'netstat -anop',
     'netstat -lntup',
     'docker ps -a',
+    'docker images',
 ]
-
-# 打包设置
-METHOD = 'zip'
-ZIP_PASSWORD = 'w2kv4nTY5fH6'
-BACKUP_FILE_STEM = 'autobackup'
-DAYS_TO_RETAIN = 60
-MIN_COUNT_TO_KEEP = 5
 
 # 要备份的文件或目录，以空格或换行分割
 SOURCE_PATH = [
+    '/etc/os-release',
+    '/etc/motd',
     '/etc/hosts',
     '/etc/passwd',
-    '/etc/nginx'
+    '/etc/nginx',
+    '/etc/zabbix',
+    '/backup',
 ]
 
 # exclude匹配目录时，*不要*在最后加 /
