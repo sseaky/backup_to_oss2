@@ -8,6 +8,7 @@ import re
 import subprocess
 import pytz
 import socket
+import getpass
 from minio import Minio
 from datetime import datetime, timedelta
 from cryptography.fernet import Fernet
@@ -232,7 +233,7 @@ if __name__ == '__main__':
                         x[k] = decrypto(x[k], key)
                 break
             except Exception as e:
-                key = input('DECRYPTO_KEY is not correct, please input again: ')
+                key = getpass.getpass('DECRYPTO_KEY is not correct, please input again: ')
 
     oss_instances = []
     for oss_config in OSS_CONFIGS:

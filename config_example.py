@@ -1,3 +1,6 @@
+
+import os
+
 # 打包设置
 ZIP_PASSWORD = '12345678'
 BACKUP_FILE_STEM = 'autobackup'
@@ -28,8 +31,10 @@ STATUS_COMMANDS = [
     'docker images',
 ]
 
+
 # 要备份的文件或目录，以空格或换行分割
 SOURCE_PATH = [
+    os.path.abspath(__file__),
     '/etc/os-release',
     '/etc/motd',
     '/etc/hosts',
@@ -61,5 +66,5 @@ OSS_CONFIGS = [
 ]
 
 # DECRYPTO，将会使用DECRYPTO_KEY对url、access_key、secret_key解密
-DECRYPTO = True
+DECRYPTO = False
 DECRYPTO_KEY = ''
