@@ -13,7 +13,7 @@ from datetime import datetime, timedelta
 from cryptography.fernet import Fernet
 
 from config import OSS_CONFIGS, CLIENT_NAME, DAYS_TO_RETAIN, STATUS_FILE_PATH, \
-    MIN_COUNT_TO_KEEP, ZIP_PASSWORD, SOURCE_PATH, SOURCE_EXCLUDE, STATUS_COMMANDS, DECRYPTO_KEY
+    MIN_COUNT_TO_KEEP, ZIP_PASSWORD, SOURCE_PATH, SOURCE_EXCLUDE, STATUS_COMMANDS, DECRYPTO, DECRYPTO_KEY
 
 
 def encrypto(string, key):
@@ -158,7 +158,7 @@ class Package(_Class):
         output = subprocess.getoutput(' '.join(command))
         return output
 
-    def pack_backup(self, source_path, source_exclude, tar=False, zip_password=None):
+    def pack_backup(self, source_path, source_exclude, tar=False, zip_password=None, dereference=False):
         source_list = [x.strip() for x in source_path]
         source_exclude_liset = [x.strip() for x in source_exclude]
 
@@ -167,8 +167,11 @@ class Package(_Class):
         stem = f'autobackup_{current_datetime}'
         tar_name = f'{stem}.tar.gz'
         # Create tar
-        tar_command = ['tar', 'zcf', tar_name] + \
-                      ['--exclude=' + pattern for pattern in source_exclude_liset] + source_list
+        tar_command = ['tar', 'zcf']
+        tar_command.append(tar_name)
+        if dereference:
+            tar_command.append('--dereference')
+        tar_command += ['--exclude=' + pattern for pattern in source_exclude_liset] + source_list
         self._safe_subprocess_run(tar_command)
         if tar or not zip_password:
             return tar_name
@@ -179,7 +182,6 @@ class Package(_Class):
         self._safe_subprocess_run(zip_command)
         self.remove(tar_name)
         return zip_name
-
 
     def save_status(self, commands, status_file_path):
         with open(status_file_path, 'w') as status_file:
@@ -211,6 +213,7 @@ if __name__ == '__main__':
     parser.add_argument('--enc-text', metavar='TEXT', type=str, help='Encrypto text')
     parser.add_argument('--enc-key', metavar='key', type=str, help='Encrypto key')
     parser.add_argument('--tar', action='store_true', help='use tar instead of zip, disable encrypt')
+    parser.add_argument('--dereference', action='store_true', help='follow symlinks')
     parser.add_argument('--verbose', action='store_true', help='Display verbose output.')
 
     args = parser.parse_args()
@@ -220,10 +223,16 @@ if __name__ == '__main__':
             encrypto(string=txt, key=args.enc_key)
         exit(0)
 
-    if isinstance(DECRYPTO_KEY, str):
-        for x in OSS_CONFIGS:
-            for k in ['url', 'access_key', 'secret_key']:
-                x[k] = decrypto(x[k], DECRYPTO_KEY)
+    if DECRYPTO is True:
+        key = DECRYPTO_KEY
+        while True:
+            try:
+                for x in OSS_CONFIGS:
+                    for k in ['url', 'access_key', 'secret_key']:
+                        x[k] = decrypto(x[k], key)
+                break
+            except Exception as e:
+                key = input('DECRYPTO_KEY is not correct, please input again: ')
 
     oss_instances = []
     for oss_config in OSS_CONFIGS:
@@ -240,7 +249,8 @@ if __name__ == '__main__':
         if args.with_status:
             pk.save_status(commands=STATUS_COMMANDS, status_file_path=STATUS_FILE_PATH)
             SOURCE_PATH.append(STATUS_FILE_PATH)
-        fn = pk.pack_backup(source_path=SOURCE_PATH, source_exclude=SOURCE_EXCLUDE, tar=args.tar, zip_password=ZIP_PASSWORD)
+        fn = pk.pack_backup(source_path=SOURCE_PATH, source_exclude=SOURCE_EXCLUDE, tar=args.tar,
+                            zip_password=ZIP_PASSWORD, dereference=args.dereference)
         for ossi in oss_instances:
             ossi.upload_object(remote_dir=client_name, local_file_path=fn)
             ossi.delete_old_objects(
@@ -250,4 +260,3 @@ if __name__ == '__main__':
         ossi_main.prompt_for_download(remote_dir=client_name)
     elif args.download:
         ossi_main.download_object(args.download)
-

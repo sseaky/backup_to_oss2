@@ -48,6 +48,8 @@ SOURCE_EXCLUDE = [
     '*/.git'
 ]
 
+HTTP_PROXY = None
+
 # 可配置多个OSS服务器。backup时会上传至所有可用的服务器，list/download时使用第1个可用的服务器
 OSS_CONFIGS = [
     {
@@ -58,7 +60,6 @@ OSS_CONFIGS = [
     }
 ]
 
-HTTP_PROXY = None
-
-# 如果设置了str，将会对ZIP_PASSWORD、access_key、secret_key解密
-DECRYPTO_KEY = None
+# DECRYPTO，将会使用DECRYPTO_KEY对url、access_key、secret_key解密
+DECRYPTO = True
+DECRYPTO_KEY = ''

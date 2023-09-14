@@ -36,6 +36,7 @@ vi config.py
 | --with-status | 备份时，可保存客户端的一些状态信息    |
 | --verbose     | 详细输出                              |
 | --tar         | 打包成tar，不加密                     |
+| --dereference | 跟随link文件                          |
 | --enc-text    | 使用enc-key加密字串                   |
 | --enc-key     | 加密key                               |
 
